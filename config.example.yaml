@@ -1,0 +1,41 @@
+# Copy to config.yaml and edit. Times are local wall-clock in `timezone`.
+timezone: America/Chicago          # any IANA zone: America/New_York, America/Denver, Europe/London...
+
+miners:
+  - ip: 192.168.1.50
+    name: garage-s21xp
+    # password: root               # only if you changed the web password
+    # watts: 3645                  # power while hashing; default is the model's nameplate figure
+  # - 192.168.1.51                 # a bare IP works too
+
+rules:
+  # Typical utility time-of-use on-peak: weekdays 4-9 pm, all year.
+  - name: Weekday on-peak
+    days: weekdays                 # all | weekdays | weekends | [mon, tue, ...]
+    start: "16:00"
+    end: "21:00"                   # end is exclusive; an end before start runs past midnight
+    action: sleep                  # sleep, or low (low-power mode, where the firmware supports it)
+
+  # Example: a summer-only window.
+  # - name: Summer super-peak
+  #   days: all
+  #   start: "14:00"
+  #   end: "19:00"
+  #   months: [6, 7, 8, 9]
+
+  # Example: a one-off event.
+  # - name: Grid alert
+  #   start: "15:00"
+  #   end: "20:00"
+  #   from: 2026-08-14
+  #   to: 2026-08-14
+
+price_per_kwh: 0.32                # on-peak price, for the dollar savings estimate (optional)
+poll_seconds: 60                   # how often to check and correct each miner
+resume_stagger_seconds: 30         # wake miners one at a time, this far apart
+confirm_timeout_seconds: 45        # how long to wait for a miner to report the new mode
+data_dir: data                     # event log and savings (SQLite)
+
+web:
+  host: 127.0.0.1                  # 0.0.0.0 to reach the status page from other devices (no login!)
+  port: 8787
