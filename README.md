@@ -44,7 +44,7 @@ The table below covers anything pyasic supports. The stock-Antminer fallbacks ar
 ## Install
 
 ```bash
-pip install git+https://github.com/<owner>/loadsettle-curtail
+pip install git+https://github.com/ShelteredDragon17/Mine_Control
 ```
 
 Or with Docker:
