@@ -6,6 +6,7 @@ miners:
     name: garage-s21xp
     # password: root               # only if you changed the web password
     # watts: 3645                  # power while hashing; default is the model's nameplate figure
+    # efficiency_j_th: 13.5         # price mode: J/TH, if not the model's rated figure
   # - 192.168.1.51                 # a bare IP works too
 
 rules:
@@ -29,6 +30,16 @@ rules:
   #   end: "20:00"
   #   from: 2026-08-14
   #   to: 2026-08-14
+
+# Price mode (ERCOT only): sleep each miner while the real-time price in your load zone is above its
+# breakeven, worked out from today's hashprice and the miner's efficiency. Schedule windows above still win.
+# Check the numbers first with:  curtail price --zone LZ_WEST
+# price:
+#   zone: LZ_WEST                  # LZ_WEST, LZ_NORTH, LZ_SOUTH or LZ_HOUSTON
+#   pool_fee_pct: 2
+#   adder_per_mwh: 0               # $/MWh you pay on top of the wholesale price
+#   efficiency_j_th: 29.5          # only for models the agent doesn't recognise (or set it per miner)
+#   when_stale: run                # run or sleep while there's no recent price
 
 price_per_kwh: 0.32                # on-peak price, for the dollar savings estimate (optional)
 poll_seconds: 60                   # how often to check and correct each miner

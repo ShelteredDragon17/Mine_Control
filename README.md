@@ -1,6 +1,6 @@
 # loadsettle-curtail
 
-Put your ASIC miners to sleep during expensive time-of-use hours and wake them afterward. Every command is checked against what the miner reports back, so a miner that ignored the command shows up as a failure.
+Put your ASIC miners to sleep during expensive time-of-use hours, or whenever the ERCOT power price is above what they earn, and wake them afterward. Every command is checked against what the miner reports back, so a miner that ignored the command shows up as a failure.
 
 Free and open source (Apache-2.0). It runs on anything that can run Python 3.11+ on the same network as your miners: a Raspberry Pi, an old laptop, a NAS or Docker.
 
@@ -23,6 +23,7 @@ This tool uses [pyasic](https://github.com/UpstreamData/pyasic) for the miner pr
   * Windows can be limited to certain months or dates.
   * A window can run past midnight.
   * A window can use **Low** power mode instead of **Sleep** where the firmware supports it.
+* **Price mode (ERCOT).** Each miner sleeps while the real-time power price in its load zone is above its breakeven, worked out from the daily hashprice and the miner's efficiency. See [Price mode](#price-mode-ercot).
 * **Confirmed commands.**
   * After sending Sleep or Normal, the agent polls until the miner reports the new mode.
   * On stock Antminers it tries three encodings of the command. It remembers which one works for each miner.
@@ -30,7 +31,7 @@ This tool uses [pyasic](https://github.com/UpstreamData/pyasic) for the miner pr
 * **Staggered wake-ups.** Miners resume one at a time, `resume_stagger_seconds` apart.
 * **Safe when blind.** An unreachable miner is left alone and retried. The agent never acts on a state it can't read.
 * **Local status page** with manual override buttons: Sleep 1 h, Run 1 h, Pause automation, Back to schedule.
-* **Savings log.** Each run records kWh and dollars avoided during scheduled windows in SQLite.
+* **Savings log.** Each run records kWh and dollars avoided during scheduled windows and price-mode sleeps in SQLite.
 
 ## Supported miners
 
@@ -91,6 +92,59 @@ curtail wake 192.168.1.50
 curtail status
 ```
 
+```bash
+curtail price --zone LZ_WEST
+```
+
+## Price mode (ERCOT)
+
+For miners in Texas paying the real-time wholesale price (an indexed retail plan or direct ERCOT exposure). When the price is above what a miner earns per MWh it burns, it is losing money, so the agent puts it to sleep; when the price falls back, it wakes it.
+
+Each miner's breakeven, in $/MWh:
+
+```
+breakeven = hashprice ($/PH/s/day) x (1 - pool fee) / (J/TH x 0.024)  -  adder
+```
+
+A rig at E J/TH draws E watts per TH/s, so 1 PH/s burns E x 0.024 MWh a day. At a hashprice of $27.46/PH/day and a 2% pool fee (Nov 21, 2026), that is about $38/MWh for an S19j Pro (29.5 J/TH) and $83/MWh for an S21 XP (13.5 J/TH). Each miner gets its own breakeven, so in a mixed fleet the older rigs sleep first.
+
+Turn it on with a `price:` section in `config.yaml`:
+
+```yaml
+price:
+  zone: LZ_WEST            # your ERCOT load zone: LZ_WEST, LZ_NORTH, LZ_SOUTH or LZ_HOUSTON
+  pool_fee_pct: 2
+  adder_per_mwh: 0         # anything you pay per MWh on top of the wholesale price
+  # efficiency_j_th: 29.5  # for models the agent doesn't recognise (or set it per miner)
+  # breakeven: 40          # a fixed $/MWh instead of working it out from the hashprice
+  # hashprice: 30          # a fixed $/PH/day instead of the daily figure
+  # action: low            # low-power mode instead of sleep, where the firmware supports it
+  # when_stale: run        # run (default) or sleep while there's no recent price
+```
+
+How it behaves:
+
+* **Prices.** The latest 15-minute load-zone price comes from [LoadSettle](https://loadsettle.com/mining) (`https://loadsettle.com/api/live`), checked every 5 minutes. ERCOT publishes each price after its interval ends, so the price the agent acts on trails real time by 15 to 30 minutes. On West Texas prices over the last year, that lag gave up about 6% of the gain from sleeping, compared with perfect hindsight.
+* **Hashprice.** It's fetched every 6 hours from LoadSettle's daily figure. If that can't be reached, the agent works it out from [mempool.space](https://mempool.space) data: difficulty, the last 144 blocks' rewards and the BTC price.
+* **Efficiency.** The agent uses the miner's rated J/TH, looked up from its model. Set `efficiency_j_th` per miner, or fleet-wide under `price:`, for other models or custom tunes.
+* **What wins.** A manual override beats everything. Schedule windows beat price mode, and price mode decides only outside them.
+* **No recent price.** If the price is more than 60 minutes old (`stale_minutes`) or can't be fetched, miners keep mining unless `when_stale: sleep`.
+* **Status page.** Shows the price, the hashprice, and each miner's breakeven and the reason for its current mode.
+
+Check the numbers before you turn it on:
+
+```bash
+curtail price --zone LZ_WEST
+```
+
+That prints the current price, today's hashprice, each common Antminer's breakeven and whether it would mine or sleep right now. Use `--efficiency 25` for your own rig, and `--pool-fee` and `--adder` for your costs. [loadsettle.com/mining](https://loadsettle.com/mining) shows how often each rig would have slept over the last year in each zone, and what that was worth per MW.
+
+**Limits.**
+
+* It only covers ERCOT's four load zones.
+* On a fixed-price power contract it doesn't apply as is. The same hours are when selling the power back can pay more than mining, but that's between you and your provider.
+* ERCOT 4CP transmission charges are set by the four summer peaks, which the price doesn't reliably flag. Use a schedule window for those afternoons.
+
 ## Self-test
 
 `curtail selftest IP` runs these steps:
@@ -145,7 +199,7 @@ pip install -e ".[test]"
 pytest
 ```
 
-The tests run the agent end to end against the simulator. That covers firmware that ignores writes, string-only firmware, the alternate mode key, unreachable miners and staggered wake-ups.
+The tests run the agent end to end against the simulator. That covers firmware that ignores writes, string-only firmware, the alternate mode key, unreachable miners and staggered wake-ups. Price mode is tested with mocked price and hashprice feeds, including stale prices, the mempool.space fallback, per-miner breakevens and schedule/override precedence.
 
 ## License
 
