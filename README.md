@@ -98,7 +98,9 @@ curtail price --zone LZ_WEST
 
 ## Price mode (ERCOT)
 
-For miners in Texas paying the real-time wholesale price (an indexed retail plan or direct ERCOT exposure). When the price is above what a miner earns per MWh it burns, it is losing money, so the agent puts it to sleep; when the price falls back, it wakes it.
+**Only if you pay the real-time price or can sell power back.** Price mode is for Texas miners on an indexed retail plan or direct ERCOT exposure, or on a fixed-price contract that credits unused power at the real-time price. On a flat ¢/kWh rate with no resale, every hour costs the same, so timing can't help: use the schedule for time-of-use peaks and 4CP afternoons instead. [loadsettle.com/mining](https://loadsettle.com/mining) shows, for each buying arrangement, whether your rigs pay at all.
+
+When the price is above what a miner earns per MWh it burns, it is losing money (or, on a sell-back contract, the power is worth more sold than mined), so the agent puts it to sleep; when the price falls back, it wakes it.
 
 Each miner's breakeven, in $/MWh:
 
@@ -142,7 +144,7 @@ That prints the current price, today's hashprice, each common Antminer's breakev
 **Limits.**
 
 * It only covers ERCOT's four load zones.
-* On a fixed-price power contract it doesn't apply as is. The same hours are when selling the power back can pay more than mining, but that's between you and your provider.
+* On a sell-back contract, whether unused power is credited, and at what price, is up to the contract. Some cap the upside, credit at a node or hub price, or need notice.
 * ERCOT 4CP transmission charges are set by the four summer peaks, which the price doesn't reliably flag. Use a schedule window for those afternoons.
 
 ## Self-test
