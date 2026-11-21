@@ -1,4 +1,4 @@
-"""Command line: curtail run | status | selftest | sleep | wake | scan | sim"""
+"""Command line: curtail run | status | price | selftest | sleep | wake | scan | sim"""
 from __future__ import annotations
 
 import argparse
@@ -36,6 +36,39 @@ def _status(args) -> None:
 
     with urllib.request.urlopen(f"http://{args.host}:{args.port}/api/status", timeout=5) as r:
         print(json.dumps(json.load(r), indent=2))
+
+
+def _price(args) -> None:
+    from datetime import datetime, timezone
+
+    from .price import PriceConf, PriceFeed
+
+    rigs = [("Antminer S19", 34.0), ("Antminer S19j Pro", 29.5), ("Antminer S19 XP", 21.5), ("Antminer S21", 17.5),
+            ("Antminer S21 XP", 13.5)]
+    if args.efficiency:
+        rigs = [(f"{args.efficiency} J/TH", args.efficiency)]
+
+    async def main():
+        feed = PriceFeed(PriceConf(zone=args.zone, pool_fee_pct=args.pool_fee, adder_per_mwh=args.adder, hashprice=args.hashprice))
+        await feed.refresh(force=True)
+        await feed.close()
+        now = datetime.now(timezone.utc)
+        st = feed.status(now)
+        print(f"ERCOT {args.zone}: " + (f"${st['price']:.2f}/MWh, interval starting {st['price_at']}" if st["price"] is not None else "no price")
+              + ("" if st["fresh"] else "  (not recent: price mode would not act on it)"))
+        if st["error"]:
+            print("  " + st["error"])
+        print(f"Hashprice: ${st['hashprice']:.2f}/PH/day ({st['hashprice_source']}, {st['hashprice_date'] or 'today'})"
+              if st["hashprice"] is not None else "Hashprice: unavailable")
+        print(f"Pool fee {args.pool_fee}%, adder ${args.adder}/MWh\n")
+        print(f"{'Rig':<20}{'J/TH':>6}{'Breakeven $/MWh':>18}  Now")
+        for name, jth in rigs:
+            be = feed.breakeven_for(jth)
+            mode, _ = feed.decide(jth, now)
+            print(f"{name:<20}{jth:>6}{(f'{be:.2f}' if be is not None else '-'):>18}  {'mine' if mode == 'normal' else mode}")
+        return st["price"] is not None and st["hashprice"] is not None
+
+    sys.exit(0 if asyncio.run(main()) else 1)
 
 
 def _selftest(args) -> None:
@@ -91,12 +124,20 @@ def main(argv=None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     for noisy in ("pyasic", "httpx", "aiohttp.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-    ap = argparse.ArgumentParser(prog="curtail", description="Sleep and wake miners on a schedule, with confirmation.")
+    ap = argparse.ArgumentParser(prog="curtail", description="Sleep and wake miners on a schedule or by ERCOT price, with confirmation.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("run", help="run the agent with a config file")
     p.add_argument("-c", "--config", default="config.yaml")
     p.set_defaults(fn=_run)
+
+    p = sub.add_parser("price", help="show the ERCOT price, today's hashprice and each rig's breakeven")
+    p.add_argument("--zone", default="LZ_WEST", choices=["LZ_WEST", "LZ_NORTH", "LZ_SOUTH", "LZ_HOUSTON"])
+    p.add_argument("--efficiency", type=float, help="your rig's J/TH (default: a table of common Antminers)")
+    p.add_argument("--pool-fee", type=float, default=2.0, help="pool fee, %% (default 2)")
+    p.add_argument("--adder", type=float, default=0.0, help="$/MWh you pay on top of the wholesale price (default 0)")
+    p.add_argument("--hashprice", type=float, help="use this $/PH/day instead of today's figure")
+    p.set_defaults(fn=_price)
 
     p = sub.add_parser("status", help="print the running agent's status")
     p.add_argument("--host", default="127.0.0.1")

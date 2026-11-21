@@ -26,12 +26,12 @@ button{{font:inherit;padding:6px 12px;border:0;border-radius:6px;background:var(
 </style></head><body>
 <h1>Curtail agent</h1>
 <div class="box"><b>Schedule says: {desired}</b> <span class="mut">({reason})</span><br>
-<span class="mut">Local time {now} · next change {next}</span>{override}</div>
-<table><tr><th>Miner</th><th>Model</th><th>Mode</th><th>Hashrate</th><th>Last command</th></tr>{rows}</table>
+<span class="mut">Local time {now} · next change {next}</span>{override}</div>{price}
+<table><tr><th>Miner</th><th>Model</th><th>Mode</th><th>Hashrate</th><th>Why</th><th>Last command</th></tr>{rows}</table>
 <div class="box"><b>Manual override</b><br>
 <button onclick="ov('sleep',60)">Sleep 1 h</button><button onclick="ov('normal',60)">Run 1 h</button>
 <button onclick="ov('pause',240)">Pause automation 4 h</button><button onclick="clr()">Back to schedule</button></div>
-<div class="box"><b>Estimated savings</b> <span class="mut">(time asleep inside schedule windows)</span><br>{savings}</div>
+<div class="box"><b>Estimated savings</b> <span class="mut">(time asleep for the schedule or price mode)</span><br>{savings}</div>
 <script>
 async function ov(mode,minutes){{await fetch('/api/override',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{mode,minutes}})}});location.reload()}}
 async function clr(){{await fetch('/api/override/clear',{{method:'POST'}});location.reload()}}
@@ -49,7 +49,23 @@ def _row(m: dict) -> str:
     last = "—" if not lc else (f'<span class="{"ok" if lc["ok"] else "bad"}">{e(lc["mode"])} '
                                f'{"confirmed" if lc["ok"] else "NOT confirmed"}</span>'
                                + (f' <span class="mut">via {e(lc["method"] or "")}</span>' if lc["ok"] else ""))
-    return f'<tr><td>{e(m["name"])}<br><span class="mut">{e(m["ip"])}</span></td><td>{e(m["model"] or "—")}</td><td>{state}</td><td>{hr}</td><td>{last}</td></tr>'
+    why = e(m.get("reason") or "—") + (f'<br><span class="mut">breakeven ${m["breakeven"]:.2f}/MWh</span>' if m.get("breakeven") is not None else "")
+    return (f'<tr><td>{e(m["name"])}<br><span class="mut">{e(m["ip"])}</span></td><td>{e(m["model"] or "—")}</td><td>{state}</td>'
+            f'<td>{hr}</td><td>{why}</td><td>{last}</td></tr>')
+
+
+def _price_box(p: dict | None) -> str:
+    if not p:
+        return ""
+    e = html.escape
+    px = (f'${p["price"]:.2f}/MWh for the interval starting {e(p["price_at"] or "")}' if p["price"] is not None else "no price yet")
+    hp = (f'${p["fixed_breakeven"]:.2f}/MWh fixed breakeven' if p["fixed_breakeven"] is not None else
+          f'hashprice ${p["hashprice"]:.2f}/PH/day ({e(p["hashprice_source"] or "")}, {e(p["hashprice_date"] or "")})' if p["hashprice"] is not None
+          else "hashprice not fetched yet")
+    stale = "" if p["fresh"] else ' <span class="bad">(not recent: not acting on it)</span>'
+    err = f'<br><span class="bad">{e(p["error"])}</span>' if p["error"] else ""
+    return (f'<div class="box"><b>Price mode, ERCOT {e(p["zone"])}:</b> {px}{stale}<br><span class="mut">{hp} · '
+            f'price from loadsettle.com</span>{err}</div>')
 
 
 def make_app(agent: Agent) -> web.Application:
@@ -62,7 +78,7 @@ def make_app(agent: Agent) -> web.Application:
             desired=html.escape(str(s["desired"] or "nothing (paused)")), reason=html.escape(s["reason"]),
             now=html.escape(s["now"]), next=html.escape(s["next_change"] or "none in the next week"),
             override=(f'<br><b>Override:</b> {html.escape(str(ov["mode"] or "paused"))} until {html.escape(ov["until"])}' if ov else ""),
-            rows="".join(_row(m) for m in s["miners"]), savings=savings)
+            rows="".join(_row(m) for m in s["miners"]), savings=savings, price=_price_box(s.get("price")))
         return web.Response(text=body, content_type="text/html")
 
     async def status(_):

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from .price import PriceConf, conf_from_dict
 from .schedule import Schedule, schedule_from_config
 
 
@@ -15,6 +16,7 @@ class MinerConf:
     name: str | None = None
     password: str | None = None        # web password if not the firmware default
     watts: float | None = None         # power when hashing, for the savings estimate (else a model default)
+    efficiency_j_th: float | None = None   # for price mode, if the model isn't recognised or runs a custom tune
     http_port: int | None = None       # simulator / unusual setups only
     rpc_port: int | None = None
 
@@ -32,6 +34,7 @@ class Config:
     data_dir: Path = field(default_factory=lambda: Path("data"))
     web_host: str = "127.0.0.1"
     web_port: int = 8787
+    price: PriceConf | None = None            # price mode (curtail/price.py); None = schedule only
 
 
 def load(path: str | Path) -> Config:
@@ -62,4 +65,5 @@ def load(path: str | Path) -> Config:
         data_dir=Path(raw.get("data_dir", "data")),
         web_host=web.get("host", "127.0.0.1"),
         web_port=int(web.get("port", 8787)),
+        price=conf_from_dict(raw["price"]) if raw.get("price") else None,
     )

@@ -7,7 +7,9 @@ Behaviour:
     is retried next tick and flagged in the status.
   * A manual override (force sleep / force run / pause automation) beats the schedule until it expires.
   * If a miner is unreachable it is left alone and retried; the agent never assumes a state it can't read.
-  * Savings are estimated from the time each miner actually spent asleep inside a schedule window:
+  * Price mode (optional, curtail/price.py): outside schedule windows, each miner sleeps while the ERCOT price is
+    above its own breakeven, worked out from the daily hashprice and the miner's efficiency.
+  * Savings are estimated from the time each miner actually spent asleep inside a schedule window or for price:
     (hashing watts - idle watts) x hours, and x price_per_kwh if given.
 """
 from __future__ import annotations
@@ -22,6 +24,7 @@ from datetime import datetime, timezone
 
 from .config import Config, MinerConf
 from .control import Miner, MinerState
+from .price import PriceFeed, efficiency
 
 log = logging.getLogger("curtail")
 IDLE_W = 25.0                       # sleep-mode draw (control board + fans), rough
@@ -59,9 +62,12 @@ class Agent:
     override: Override | None = None
     _last_resume: float = 0.0
     db: sqlite3.Connection | None = None
+    price: PriceFeed | None = None
 
     def __post_init__(self):
         self.slots = [MinerSlot(m) for m in self.cfg.miners]
+        if self.cfg.price and self.price is None:
+            self.price = PriceFeed(self.cfg.price)
         self.cfg.data_dir.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.cfg.data_dir / "curtail.db")
         self.db.executescript("""
@@ -85,6 +91,15 @@ class Agent:
                 return float(NAMEPLATE_W[key])
         return DEFAULT_W
 
+    def _jth(self, slot: MinerSlot) -> float | None:
+        """J/TH for price mode: the miner's own setting, else its model's rated figure, else the fleet default."""
+        if slot.conf.efficiency_j_th:
+            return float(slot.conf.efficiency_j_th)
+        rated = efficiency(slot.state.model if slot.state else None)
+        if rated:
+            return rated
+        return self.cfg.price.efficiency_j_th if self.cfg.price else None
+
     def _close_sleep(self, slot: MinerSlot, now: float) -> None:
         if slot.asleep_since is None:
             return
@@ -107,6 +122,8 @@ class Agent:
     async def tick(self, now: datetime | None = None) -> None:
         now = now or datetime.now(timezone.utc)
         mode, reason = self.desired_mode(now)
+        if self.price:
+            await self.price.refresh()
         await asyncio.gather(*(self._tick_slot(s, mode, reason, now) for s in self.slots))
 
     async def _tick_slot(self, slot: MinerSlot, mode: str | None, reason: str, now: datetime) -> None:
@@ -120,13 +137,16 @@ class Agent:
                 slot.state = MinerState(False, error=f"{type(e).__name__}: {e}")
                 return
         slot.state = await slot.miner.read()
+        # Outside schedule windows (and with no override), price mode decides per miner.
+        if self.price and mode == "normal" and reason == "outside schedule":
+            mode, reason = self.price.decide(self._jth(slot), now)
         slot.reason = reason
         if mode is None or not slot.state.reachable:
             return
         slot.desired = mode
-        # Savings bookkeeping: count time asleep while the schedule (not an override) wants sleep.
+        # Savings bookkeeping: count time asleep while the schedule or price mode (not an override) wants sleep.
         ts = now.timestamp()
-        scheduled_sleep = reason.startswith("rule:") and mode == "sleep"
+        scheduled_sleep = reason.startswith(("rule:", "price:")) and mode == "sleep"
         if slot.state.mode == "sleep" and scheduled_sleep and slot.asleep_since is None:
             slot.asleep_since = ts
         elif not (slot.state.mode == "sleep" and scheduled_sleep):
@@ -177,7 +197,10 @@ class Agent:
                 "model": s.state.model if s.state else None,
                 "error": s.state.error if s.state else None,
                 "last_command": s.last_result, "failing": s.failures > 0,
+                "desired": s.desired, "reason": s.reason,
+                "breakeven": (round(b, 2) if self.price and (b := self.price.breakeven_for(self._jth(s))) is not None else None),
             } for s in self.slots],
+            "price": self.price.status(now) if self.price else None,
             "savings": self.savings(),
         }
 
@@ -191,12 +214,16 @@ class Agent:
 
     async def run(self, stop: asyncio.Event | None = None) -> None:
         stop = stop or asyncio.Event()
-        while not stop.is_set():
-            try:
-                await self.tick()
-            except Exception:  # noqa: BLE001 - keep the loop alive no matter what
-                log.exception("tick failed")
-            try:
-                await asyncio.wait_for(stop.wait(), timeout=self.cfg.poll_seconds)
-            except asyncio.TimeoutError:
-                pass
+        try:
+            while not stop.is_set():
+                try:
+                    await self.tick()
+                except Exception:  # noqa: BLE001 - keep the loop alive no matter what
+                    log.exception("tick failed")
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=self.cfg.poll_seconds)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            if self.price:
+                await self.price.close()
